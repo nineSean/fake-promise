@@ -1,30 +1,84 @@
 class FakePromise {
   state = 'pending'
-  private queue = []
-  private resolve(data) {
+  private callbacks = []
+  private resolveOrReject(state, index, data) {
     if (this.state !== 'pending') return
-    this.state = 'fulfilled'
+    this.state = state
     nextTick(() => {
-      this.queue.forEach(([handler])=>{
-        typeof handler === 'function' && handler(data)
+      this.callbacks.forEach((handlers) => {
+        try {
+          typeof handlers[index] === 'function' &&
+            (data = handlers[index].call(undefined, data))
+        } catch (e) {
+          handlers[2].reject(e)
+        }
+        if (typeof handlers[1] !== 'function' && state === 'rejected')
+          return handlers[2].reject(data)
+        handlers[2].resolveWith(data)
       })
     })
   }
-  private reject(reason) {
-    if (this.state !== 'pending') return
-    this.state = 'rejected'
-    nextTick(() => {
-      this.queue.forEach(([,handler])=>{
-        typeof handler === 'function' && handler(reason)
-      })
-    })
+  resolveWithSelf() {
+    this.reject(new TypeError())
+  }
+  resolveWithPromise(x) {
+    x.then(
+      (value) => {
+        this.resolve(value)
+      },
+      (reason) => {
+        this.reject(reason)
+      }
+    )
+  }
+  resolveWithObject(x){
+      try {
+        let then = x.then
+        if (typeof then === 'function') {
+          try {
+            then.call(
+              x,
+              (y) => {
+                this.resolve(y)
+              },
+              (r) => {
+                this.reject(r)
+              }
+            )
+          } catch (e) {
+            this.reject(e)
+          }
+        } else {
+          this.resolve(x)
+        }
+      } catch (e) {
+        this.reject(e)
+      }
+  }
+  resolveWith(x) {
+    if (x === this) {
+      this.resolveWithSelf()
+    } else if (x instanceof FakePromise) {
+      this.resolveWithPromise(x)
+    } else if (x instanceof Object) {
+      this.resolveWithObject(x)
+    } else {
+      this.resolve(x)
+    }
+  }
+  private resolve(data) {
+    this.resolveOrReject('fulfilled', 0, data)
+  }
+  reject(reason) {
+    this.resolveOrReject('rejected', 1, reason)
   }
   then(success?, failure?) {
     const fns = []
     fns.push(typeof success === 'function' ? success : null)
     fns.push(typeof failure === 'function' ? failure : null)
-    this.queue.push(fns)
-    return this
+    fns[2] = new FakePromise(() => {})
+    this.callbacks.push(fns)
+    return fns[2]
   }
   constructor(fn) {
     if (fn instanceof Function === false) {
@@ -42,9 +96,12 @@ function nextTick(cb) {
     //@ts-ignore
     return process.nextTick(cb)
   }
-  const div = document.createElement('div')
-  div.innerText = '1'
+
+  let counter = 1
+  const textNode = document.createTextNode(String(counter))
   const observer = new MutationObserver(cb)
-  observer.observe(div)
-  div.innerText = '2'
+  observer.observe(textNode, {
+    characterData: true,
+  })
+  textNode.data = String(++counter)
 }
